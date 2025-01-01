@@ -107,7 +107,6 @@ def extract_frame_fastseek_gpu(video_path, frame_number, fps, output_path):
 
     cmd = [
         FFMPEG_CMD,
-        '-hwaccel', 'cuda',
         '-ss', seek_str,
         '-i', video_path,
         '-frames:v', '1',
