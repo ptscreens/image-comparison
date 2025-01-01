@@ -1,7 +1,7 @@
 Compare Screens -- MediaInfo + FFmpeg + guessit + Auto Upload + BBCode
 ==========================================================
 
-A simple Python tool for **randomly extracting and comparing frames** from two `.mkv` files (Source & Encode). The script then **uploads** those screenshots to [ptscreens.com](https://ptscreens.com/) and outputs a **BBCode** file, wrapped in `[center] ... [/center]` formatting, so you can easily share side-by-side comparisons on forums.
+A simple Python tool for **randomly extracting and comparing frames** from two `.mkv` files (Source & Encode). The script then **uploads** those screenshots to [ptscreens.com](https://ptscreens.com/) and outputs a **BBCode** file, wrapped in `[center] ... [/center]` formatting, so you can easily share side-by-side comparisons on "forums".
 
 Features
 --------
