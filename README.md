@@ -63,6 +63,12 @@ Usage
 
     ```    
 
+    OR (Run as Administrator) (Packaged rquirements.ps1, requirements.txt in an exe using pyinstaller)
+
+    ```
+    AutoInstallRequirements.exe 
+
+    ```    
 4.  **Check** that `mediainfo --version` and `ffmpeg -version` work in your terminal.
 5.  **Open** the script, locate the line:
 
