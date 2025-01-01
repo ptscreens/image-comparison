@@ -1,12 +1,14 @@
 #!/usr/bin/env python3
 #
-# 1) Pick Source & Encode.
-# 2) Asks how many random frames to extract (via MediaInfo for total frames & fps).
-# 3) Extract ALL screenshots first (fast-seek GPU in ffmpeg).
-# 4) Then upload them all to specified image host (IMG_HOST).
-# 5) Write BBCode lines to:
+# 1. Tkinter dialogs -> pick Source & Encode.
+# 2. Asks how many random frames to extract (via MediaInfo for total frames & fps).
+# 3. Extract ALL screenshots first (fast-seek GPU in ffmpeg).
+# 4. Intelligently crop black bars from top and bottom of Source screenshots.
+# 5. Then upload all screenshots to and image host (IMG_HOST).
+# 6. Write BBCode lines to:
 #       .\Screens\MovieName (MovieYear)\Comparison_BBCode.txt
-
+#    The entire document is wrapped in [center]...[/center],
+#    and starts with a line "SOURCE  |  ENCODE".
 
 import os
 import re
@@ -16,16 +18,22 @@ import tkinter as tk
 from tkinter import filedialog, simpledialog
 import requests
 from guessit import guessit
+from PIL import Image  # Import Pillow for image processing
 
 ###############################################################################
 # CONFIG
 ###############################################################################
-IMG_HOST_API_KEY = "<YOUR_API_KEY_HERE>"   # <-- Set your image host API key
+IMG_HOST_API_KEY = "<YOUR_API_KEY_HERE>"   # <-- Set your Image Host API key
 IMG_HOST_UPLOAD_URL = "https://ptscreens.com/api/1/upload"
 #IMG_HOST_UPLOAD_URL = "https://imgoe.download/api/1/upload"
 
+
 FFMPEG_CMD = "ffmpeg"
 MEDIAINFO_CMD = "mediainfo"
+
+# Cropping parameters
+CROP_THRESHOLD = 30          # Pixel intensity threshold for considering non-black
+MIN_NON_BLACK_RATIO = 0.05   # Minimum ratio of non-black pixels to consider a row as non-black
 
 ###############################################################################
 # FUNCTIONS
@@ -111,9 +119,66 @@ def extract_frame_fastseek_gpu(video_path, frame_number, fps, output_path):
     subprocess.run(cmd, capture_output=True)
 
 
+def intelligently_crop_top_bottom(image_path, output_path, threshold=30, min_ratio=0.05):
+    """
+    Intelligently crop black bars from the top and bottom of the image.
+    Only removes black bars from top and bottom; side borders are left untouched.
+    Parameters:
+        - threshold: Pixel intensity above which a pixel is considered non-black.
+        - min_ratio: Minimum ratio of non-black pixels in a row to consider it as content.
+    """
+    try:
+        with Image.open(image_path) as img:
+            gray = img.convert("L")
+            width, height = gray.size
+
+            # Function to find the first row from top/bottom with sufficient non-black pixels
+            def find_boundary(start, end, step):
+                for y in range(start, end, step):
+                    row = gray.crop((0, y, width, y + 1))
+                    non_black = sum(pixel > threshold for pixel in row.getdata())
+                    if (non_black / width) >= min_ratio:
+                        return y
+                return None
+
+            # Find top boundary
+            top = find_boundary(0, height, 1)
+            if top is None:
+                top = 0  # No content found; don't crop
+            else:
+                print(f"     [INFO] Top boundary detected at row {top}")
+
+            # Find bottom boundary
+            bottom = find_boundary(height - 1, -1, -1)
+            if bottom is None:
+                bottom = height  # No content found; don't crop
+            else:
+                print(f"     [INFO] Bottom boundary detected at row {bottom}")
+
+            # Define crop box: (left, top, right, bottom)
+            crop_box = (0, top, width, bottom + 1)
+
+            # Validate crop_box to ensure we're not removing too much
+            cropped_height = bottom - top + 1
+            if cropped_height / height < 0.3:
+                print(f"     [WARN] Cropped height {cropped_height} is less than 30% of original height. Skipping cropping.")
+                img.save(output_path)
+            else:
+                # Crop and save
+                cropped_img = img.crop(crop_box)
+                cropped_img.save(output_path)
+                print(f"     [INFO] Image cropped: {crop_box}")
+
+    except Exception as e:
+        print(f"[ERROR] Cropping failed for {image_path}: {e}")
+        # In case of error, save the original image
+        with Image.open(image_path) as img:
+            img.save(output_path)
+
+
 def upload_to_img_host(image_path, api_key):
     """
-    Upload the given screenshot to Image Host, returning direct URL or None.
+    Upload the given screenshot to your image host, returning direct URL or None.
     """
     try:
         with open(image_path, "rb") as f:
@@ -131,20 +196,19 @@ def upload_to_img_host(image_path, api_key):
         print(f"[ERROR] Upload for {image_path}: {e}")
         return None
 
-
 ###############################################################################
 # MAIN
 ###############################################################################
 
 def main():
-    print("\n=== Compare Source/Encode with MediaInfo + GPU + upload to image host ===\n")
+    print("\n=== Compare Source/Encode with MediaInfo + GPU + Auto Upload ===\n")
 
     # Check API key
     if not IMG_HOST_API_KEY or IMG_HOST_API_KEY.startswith("<YOUR_API_KEY_HERE>"):
-        print("[ERROR] Please set your image host API key in the script. Exiting.")
+        print("[ERROR] Please set your ptscreens.com API key in the script. Exiting.")
         return
 
-    # Setup Tk
+    # Setup Tkinter
     root = tk.Tk()
     root.withdraw()
 
@@ -195,8 +259,8 @@ def main():
         print("[ERROR] Invalid frames/fps for Encode. Exiting.")
         return
 
-    print(f"Source -> total={s_total}, fps={s_fps}")
-    print(f"Encode -> total={e_total}, fps={e_fps}\n")
+    print(f"Source -> total_frames={s_total}, fps={s_fps}")
+    print(f"Encode -> total_frames={e_total}, fps={e_fps}\n")
 
     # 5) If frames_count > min, clamp it
     min_total = min(s_total, e_total)
@@ -219,7 +283,7 @@ def main():
     else:
         folder_name = "Unknown Movie"
 
-    base_dir = os.path.dirname(__file__)  # script's directory
+    base_dir = os.path.dirname(os.path.abspath(__file__))  # script's directory
     screens_dir = os.path.join(base_dir, "Screens")
     os.makedirs(screens_dir, exist_ok=True)
 
@@ -239,17 +303,28 @@ def main():
         # Source
         src_out = os.path.join(out_dir, f"Source_frame{frame_num}.png")
         extract_frame_fastseek_gpu(source_file, frame_num, s_fps, src_out)
-        source_screens.append(src_out)
+        print(f"     Extracted Source frame {frame_num} to {os.path.basename(src_out)}")
 
         # Encode
         enc_out = os.path.join(out_dir, f"Encode_frame{frame_num}.png")
         extract_frame_fastseek_gpu(encode_file, frame_num, e_fps, enc_out)
+        print(f"     Extracted Encode frame {frame_num} to {os.path.basename(enc_out)}")
+
+        source_screens.append(src_out)
         encode_screens.append(enc_out)
 
     print("[INFO] Extraction complete.\n")
 
-    # 8) Now upload them all
-    print("[INFO] Uploading all extracted images to image host...\n")
+    # 8) Intelligently crop black bars from Source screenshots only (top & bottom)
+    print("[INFO] Cropping black bars from Source screenshots (top & bottom only)...\n")
+    for img_path in source_screens:
+        print(f"   -> Cropping {os.path.basename(img_path)}")
+        intelligently_crop_top_bottom(img_path, img_path, threshold=CROP_THRESHOLD, min_ratio=MIN_NON_BLACK_RATIO)
+
+    print("[INFO] Cropping complete.\n")
+
+    # 9) Now upload them all
+    print("[INFO] Uploading all extracted images to your image host...\n")
     src_urls = []
     enc_urls = []
 
@@ -261,7 +336,7 @@ def main():
         src_urls.append(src_url)
         enc_urls.append(enc_url)
 
-    # 9) Write out the BBCode file in the same subfolder, with heading & center wrapper
+    # 10) Write out the BBCode file in the same subfolder, with heading & center wrapper
     bbcode_path = os.path.join(out_dir, "Comparison_BBCode.txt")
     print(f"\n[INFO] Writing BBCode lines to {bbcode_path}...\n")
 
@@ -281,7 +356,7 @@ def main():
         # End center block
         f.write("\n[/center]\n")
 
-    print("[DONE] All frames extracted & uploaded, BBCode saved.\n")
+    print("[DONE] All frames extracted, cropped, uploaded & BBCode saved.\n")
     print(f"       => Folder: {out_dir}")
     print(f"       => BBCode: {bbcode_path}\n")
 
